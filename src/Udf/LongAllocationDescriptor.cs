@@ -27,6 +27,7 @@ namespace DiscUtils.Udf
     internal class LongAllocationDescriptor : IByteArraySerializable
     {
         public uint ExtentLength;
+        public ShortAllocationFlags Flags;
         public LogicalBlockAddress ExtentLocation;
         public byte[] ImplementationUse;
 
@@ -37,7 +38,11 @@ namespace DiscUtils.Udf
 
         public int ReadFrom(byte[] buffer, int offset)
         {
-            ExtentLength = Utilities.ToUInt32LittleEndian(buffer, offset);
+            uint len = Utilities.ToUInt32LittleEndian(buffer, offset);
+
+            ExtentLength = len & 0x3FFFFFFF;
+            Flags = (ShortAllocationFlags)((len >> 30) & 0x3);
+
             ExtentLocation = new LogicalBlockAddress();
             ExtentLocation.ReadFrom(buffer, offset + 4);
             ImplementationUse = Utilities.ToByteArray(buffer, offset + 10, 6);

@@ -115,34 +115,7 @@ namespace DiscUtils.Udf
             AllocationType allocType = _fileEntry.InformationControlBlock.AllocationType;
             if (allocType == AllocationType.ShortDescriptors)
             {
-                long filePos = 0;
-
-                int i = 0;
-                while (i < activeBuffer.Length)
-                {
-                    ShortAllocationDescriptor sad = Utilities.ToStruct<ShortAllocationDescriptor>(activeBuffer, i);
-                    if (sad.ExtentLength == 0)
-                    {
-                        break;
-                    }
-
-                    if (sad.Flags != ShortAllocationFlags.RecordedAndAllocated)
-                    {
-                        throw new NotImplementedException("Extents that are not 'recorded and allocated' not implemented");
-                    }
-
-                    CookedExtent newExtent = new CookedExtent
-                    {
-                        FileContentOffset = filePos,
-                        Partition = int.MaxValue,
-                        StartPos = sad.ExtentLocation * (long)_blockSize,
-                        Length = sad.ExtentLength
-                    };
-                    _extents.Add(newExtent);
-
-                    filePos += sad.ExtentLength;
-                    i += sad.Size;
-                }
+                ReadShortDescriptors(activeBuffer);
             }
             else if (allocType == AllocationType.Embedded)
             {
@@ -150,33 +123,112 @@ namespace DiscUtils.Udf
             }
             else if (allocType == AllocationType.LongDescriptors)
             {
-                long filePos = 0;
-
-                int i = 0;
-                while (i < activeBuffer.Length)
-                {
-                    LongAllocationDescriptor lad = Utilities.ToStruct<LongAllocationDescriptor>(activeBuffer, i);
-                    if (lad.ExtentLength == 0)
-                    {
-                        break;
-                    }
-
-                    CookedExtent newExtent = new CookedExtent
-                    {
-                        FileContentOffset = filePos,
-                        Partition = lad.ExtentLocation.Partition,
-                        StartPos = lad.ExtentLocation.LogicalBlock * (long)_blockSize,
-                        Length = lad.ExtentLength
-                    };
-                    _extents.Add(newExtent);
-
-                    filePos += lad.ExtentLength;
-                    i += lad.Size;
-                }
+                ReadLongDescriptors(activeBuffer);
             }
             else
             {
                 throw new NotImplementedException("Allocation Type: " + _fileEntry.InformationControlBlock.AllocationType);
+            }
+        }
+
+
+        private void ReadShortDescriptors(byte[] activeBuffer)
+        {
+            long filePos = 0;
+
+            int i = 0;
+            while (i < activeBuffer.Length)
+            {
+                ShortAllocationDescriptor sad = Utilities.ToStruct<ShortAllocationDescriptor>(activeBuffer, i);
+                if (sad.ExtentLength == 0)
+                {
+                    break;
+                }
+
+                if (sad.Flags != ShortAllocationFlags.RecordedAndAllocated)
+                {
+                    throw new NotImplementedException("Extents that are not 'recorded and allocated' not implemented");
+                }
+
+                CookedExtent newExtent = new CookedExtent
+                {
+                    FileContentOffset = filePos,
+                    Partition = int.MaxValue,
+                    StartPos = sad.ExtentLocation * (long)_blockSize,
+                    Length = sad.ExtentLength
+                };
+                _extents.Add(newExtent);
+
+                filePos += sad.ExtentLength;
+                i += sad.Size;
+            }
+        }
+
+        private void ReadLongDescriptors(byte[] activeBuffer)
+        {
+            long filePos = 0;
+
+            int i = 0;
+            while (i < activeBuffer.Length)
+            {
+                LongAllocationDescriptor lad = Utilities.ToStruct<LongAllocationDescriptor>(activeBuffer, i);
+                if (lad.ExtentLength == 0)
+                {
+                    break;
+                }
+
+                if (lad.Flags == ShortAllocationFlags.RecordedAndAllocated)
+                {
+                    CookedExtent newExtent = new CookedExtent
+                    {
+                        FileContentOffset = filePos,
+                        Partition = lad.ExtentLocation.Partition,
+                        StartPos = lad.ExtentLocation.LogicalBlock*(long) _blockSize,
+                        Length = lad.ExtentLength
+                    };
+                    _extents.Add(newExtent);
+                }
+                else if (lad.Flags == ShortAllocationFlags.NextExtentOfAllocationDescriptors)
+                {
+                    ReadExtentDescriptors(lad, filePos);
+                }
+                filePos += lad.ExtentLength;
+                i += lad.Size;
+            }
+        }
+
+        private void ReadExtentDescriptors(LongAllocationDescriptor lad, long filePos)
+        {
+            byte[] allocExtDescBin = UdfUtilities.ReadExtent(_context, lad);
+            ExtentAllocationDescriptor allocExtDesc = Utilities.ToStruct<ExtentAllocationDescriptor>(allocExtDescBin, 0);
+            int i = 0;
+            long extentLengths = 0;
+            var activeBuffer = allocExtDesc.AllocationDescriptors;
+            while (i < activeBuffer.Length)
+            {
+                LongAllocationDescriptor extentLongAllocationDescriptor = Utilities.ToStruct<LongAllocationDescriptor>(activeBuffer, i);
+                if (extentLongAllocationDescriptor.ExtentLength == 0)
+                {
+                    break;
+                }
+
+                if (extentLongAllocationDescriptor.Flags == ShortAllocationFlags.RecordedAndAllocated)
+                {
+                    CookedExtent newExtent = new CookedExtent
+                    {
+                        FileContentOffset = filePos + extentLengths,
+                        Partition = extentLongAllocationDescriptor.ExtentLocation.Partition,
+                        StartPos = extentLongAllocationDescriptor.ExtentLocation.LogicalBlock*(long) _blockSize,
+                        Length = extentLongAllocationDescriptor.ExtentLength
+                    };
+                    _extents.Add(newExtent);
+                    extentLengths += newExtent.Length;
+                }
+                else if (extentLongAllocationDescriptor.Flags == ShortAllocationFlags.NextExtentOfAllocationDescriptors)
+                {
+                    ReadExtentDescriptors(extentLongAllocationDescriptor, filePos + extentLengths);
+                }
+                i += extentLongAllocationDescriptor.Size;
             }
         }
 
@@ -188,6 +240,10 @@ namespace DiscUtils.Udf
             while (totalRead < totalToRead)
             {
                 CookedExtent extent = FindExtent(pos + totalRead);
+                if (extent == null)
+                {
+                    return totalRead;
+                }
 
                 long extentOffset = (pos + totalRead) - extent.FileContentOffset;
                 int toRead = (int)Math.Min(totalToRead - totalRead, extent.Length - extentOffset);

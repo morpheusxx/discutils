@@ -34,29 +34,28 @@ namespace DiscUtils.Udf
 
     internal sealed class ExtentAllocationDescriptor : IByteArraySerializable
     {
-        public uint ExtentLength;
-        public uint ExtentLocation;
-
+        public DescriptorTag DescriptorTag;
+        public uint PreviousAllocationLocation;
+        public uint AllocationDescriptorsLength;
+        public byte[] AllocationDescriptors;
         public int Size
         {
-            get { return 8; }
+            get { return 24; }
         }
 
         public int ReadFrom(byte[] buffer, int offset)
         {
-            ExtentLength = Utilities.ToUInt32LittleEndian(buffer, offset);
-            ExtentLocation = Utilities.ToUInt32LittleEndian(buffer, offset + 4);
-            return 8;
+            DescriptorTag = new DescriptorTag();
+            int read = DescriptorTag.ReadFrom(buffer, 0);
+            PreviousAllocationLocation = Utilities.ToUInt32LittleEndian(buffer, read + offset);
+            AllocationDescriptorsLength = Utilities.ToUInt32LittleEndian(buffer, read + offset + 4);
+            AllocationDescriptors = Utilities.ToByteArray(buffer, read + offset + 8, (int)AllocationDescriptorsLength);
+            return read + 8 + (int)AllocationDescriptorsLength;
         }
 
         public void WriteTo(byte[] buffer, int offset)
         {
             throw new NotImplementedException();
-        }
-
-        public override string ToString()
-        {
-            return ExtentLocation + ":+" + ExtentLength;
         }
     }
 }
